@@ -1,0 +1,454 @@
+
+const STORE_COPY = 'graduationAlbum.copyOverrides.v1';
+const STORE_INSERTS = 'graduationAlbum.customInserts.v1';
+const STORE_US_ADDS = 'graduationAlbum.usAdds.v1';
+const STORE_US_REMOVES = 'graduationAlbum.usRemoves.v1';
+
+function readJSON(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key) || ''); } catch { return fallback; }
+}
+function writeJSON(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
+function downloadJSON(name, value) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 500);
+}
+
+let copyOverrides = readJSON(STORE_COPY, {});
+let customInserts = readJSON(STORE_INSERTS, []);
+let usAdds = readJSON(STORE_US_ADDS, {});
+let usRemoves = readJSON(STORE_US_REMOVES, {});
+
+const syncConfig = window.ALBUM_SYNC_CONFIG || {};
+let syncClient = null;
+let syncUser = null;
+let syncSaveTimer = null;
+
+function syncSetStatus(message) {
+  const node = document.getElementById('sync-status');
+  if (node) node.textContent = message;
+}
+
+function getAlbumState() {
+  return {
+    copyOverrides,
+    customInserts,
+    usAdds,
+    usRemoves,
+    savedAt: new Date().toISOString()
+  };
+}
+
+function persistAlbumState() {
+  writeJSON(STORE_COPY, copyOverrides);
+  writeJSON(STORE_INSERTS, customInserts);
+  writeJSON(STORE_US_ADDS, usAdds);
+  writeJSON(STORE_US_REMOVES, usRemoves);
+}
+
+function applyAlbumState(state) {
+  copyOverrides = state?.copyOverrides || {};
+  customInserts = state?.customInserts || [];
+  usAdds = state?.usAdds || {};
+  usRemoves = state?.usRemoves || {};
+  persistAlbumState();
+  applyCopyOverrides();
+  renderCustomInserts();
+  renderUsGrid();
+}
+
+function queueCloudSave() {
+  if (!syncClient || !syncUser) return;
+  clearTimeout(syncSaveTimer);
+  syncSaveTimer = setTimeout(() => { saveCloudState().catch((error) => syncSetStatus(`云端保存失败：${error.message}`)); }, 900);
+}
+
+
+function applyCopyOverrides() {
+  document.querySelectorAll('[data-copy-id]').forEach((node) => {
+    const id = node.dataset.copyId;
+    if (copyOverrides[id] !== undefined) node.innerHTML = copyOverrides[id];
+  });
+}
+applyCopyOverrides();
+
+const originalCards = Array.from(document.querySelectorAll('.month-spread .photo-card'));
+const lightbox = document.querySelector('.lightbox');
+const lightboxImg = lightbox.querySelector('img');
+const lightboxCaption = lightbox.querySelector('figcaption');
+const closeBtn = lightbox.querySelector('.lightbox-close');
+const prevBtn = lightbox.querySelector('.lightbox-prev');
+const nextBtn = lightbox.querySelector('.lightbox-next');
+const usToggle = document.getElementById('us-toggle');
+let currentIndex = 0;
+let currentCard = null;
+
+function isInUs(card) {
+  const id = card.dataset.photoId;
+  if (!id) return false;
+  if (usRemoves[id]) return false;
+  return card.dataset.usCandidate === '1' || !!usAdds[id];
+}
+
+function setUsState(card, value) {
+  const id = card.dataset.photoId;
+  if (!id) return;
+  if (value) {
+    usAdds[id] = true;
+    delete usRemoves[id];
+  } else {
+    delete usAdds[id];
+    usRemoves[id] = true;
+  }
+  writeJSON(STORE_US_ADDS, usAdds);
+  writeJSON(STORE_US_REMOVES, usRemoves);
+  queueCloudSave();
+  renderUsGrid();
+  updateUsToggle();
+}
+
+function updateUsToggle() {
+  if (!currentCard || !currentCard.dataset.photoId) {
+    usToggle.style.display = 'none';
+    return;
+  }
+  usToggle.style.display = '';
+  usToggle.textContent = isInUs(currentCard) ? '移出我们' : '加入我们';
+}
+
+function openLightboxByCard(card) {
+  currentCard = card;
+  const index = originalCards.findIndex((item) => item.dataset.photoId === card.dataset.photoId);
+  currentIndex = index >= 0 ? index : currentIndex;
+  lightboxImg.src = card.dataset.full;
+  lightboxImg.alt = card.dataset.caption || '';
+  lightboxCaption.textContent = card.dataset.caption || '';
+  lightbox.classList.add('open');
+  lightbox.setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+  updateUsToggle();
+}
+
+function openLightbox(index) {
+  if (!originalCards.length) return;
+  currentIndex = index;
+  openLightboxByCard(originalCards[currentIndex]);
+}
+
+function closeLightbox() {
+  lightbox.classList.remove('open');
+  lightbox.setAttribute('aria-hidden', 'true');
+  lightboxImg.src = '';
+  document.body.style.overflow = '';
+}
+
+function step(delta) {
+  if (!originalCards.length) return;
+  currentIndex = (currentIndex + delta + originalCards.length) % originalCards.length;
+  openLightbox(currentIndex);
+}
+
+originalCards.forEach((card, index) => {
+  card.addEventListener('click', () => openLightbox(index));
+});
+closeBtn.addEventListener('click', closeLightbox);
+prevBtn.addEventListener('click', () => step(-1));
+nextBtn.addEventListener('click', () => step(1));
+usToggle.addEventListener('click', () => {
+  if (currentCard) setUsState(currentCard, !isInUs(currentCard));
+});
+lightbox.addEventListener('click', (event) => {
+  if (event.target === lightbox) closeLightbox();
+});
+document.addEventListener('keydown', (event) => {
+  if (!lightbox.classList.contains('open')) return;
+  if (event.key === 'Escape') closeLightbox();
+  if (event.key === 'ArrowLeft') step(-1);
+  if (event.key === 'ArrowRight') step(1);
+});
+
+function renderUsGrid() {
+  const grid = document.getElementById('us-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  const cards = originalCards.filter(isInUs);
+  cards.forEach((card) => {
+    const clone = document.createElement('button');
+    clone.type = 'button';
+    clone.className = `photo-card ${card.classList.contains('wide') ? 'wide' : card.classList.contains('square') ? 'square' : 'portrait'}`;
+    clone.dataset.photoId = card.dataset.photoId;
+    clone.dataset.full = card.dataset.full;
+    clone.dataset.thumb = card.dataset.thumb;
+    clone.dataset.caption = card.dataset.caption;
+    clone.innerHTML = `<img src="${card.dataset.thumb}" alt="${card.dataset.caption || ''}" loading="lazy" decoding="async"><span class="photo-caption">我们</span>`;
+    clone.addEventListener('click', () => openLightboxByCard(card));
+    grid.appendChild(clone);
+  });
+  const count = document.getElementById('us-count');
+  if (count) count.textContent = `${cards.length} photos`;
+}
+renderUsGrid();
+
+const player = document.querySelector('.music-player');
+const tracks = player ? JSON.parse(player.dataset.tracks || '[]') : [];
+const audio = document.getElementById('bgm-audio');
+const trackTitle = document.getElementById('track-title');
+const playBtn = document.getElementById('track-play');
+const prevTrackBtn = document.getElementById('track-prev');
+const nextTrackBtn = document.getElementById('track-next');
+const muteBtn = document.getElementById('track-mute');
+const volume = document.getElementById('track-volume');
+let trackIndex = 0;
+
+function loadTrack(index, shouldPlay = false) {
+  if (!tracks.length) return;
+  trackIndex = (index + tracks.length) % tracks.length;
+  const track = tracks[trackIndex];
+  audio.src = track.src;
+  trackTitle.textContent = `${track.title} - ${track.artist}`;
+  if (shouldPlay) audio.play().catch(() => {});
+  playBtn.textContent = audio.paused ? 'Play' : 'Pause';
+}
+if (tracks.length) {
+  audio.volume = Number(volume.value);
+  loadTrack(0, false);
+}
+playBtn?.addEventListener('click', () => {
+  if (!tracks.length) return;
+  if (audio.paused) audio.play().catch(() => {});
+  else audio.pause();
+});
+audio?.addEventListener('play', () => { playBtn.textContent = 'Pause'; });
+audio?.addEventListener('pause', () => { playBtn.textContent = 'Play'; });
+audio?.addEventListener('ended', () => loadTrack(trackIndex + 1, true));
+prevTrackBtn?.addEventListener('click', () => loadTrack(trackIndex - 1, !audio.paused));
+nextTrackBtn?.addEventListener('click', () => loadTrack(trackIndex + 1, !audio.paused));
+muteBtn?.addEventListener('click', () => {
+  audio.muted = !audio.muted;
+  muteBtn.textContent = audio.muted ? 'Sound' : 'Mute';
+});
+volume?.addEventListener('input', () => {
+  audio.volume = Number(volume.value);
+  if (audio.volume > 0) audio.muted = false;
+  muteBtn.textContent = audio.muted ? 'Sound' : 'Mute';
+});
+
+const copyToggle = document.getElementById('copy-toggle');
+let editingCopy = false;
+function setCopyEditing(enabled) {
+  editingCopy = enabled;
+  document.querySelectorAll('[data-copy-id]').forEach((node) => {
+    node.contentEditable = enabled ? 'true' : 'false';
+    node.classList.toggle('editing-copy', enabled);
+  });
+  copyToggle.textContent = enabled ? '完成文案' : '文案';
+}
+copyToggle?.addEventListener('click', () => setCopyEditing(!editingCopy));
+document.querySelectorAll('[data-copy-id]').forEach((node) => {
+  node.addEventListener('blur', () => {
+    if (!editingCopy) return;
+    copyOverrides[node.dataset.copyId] = node.innerHTML;
+    writeJSON(STORE_COPY, copyOverrides);
+    queueCloudSave();
+  });
+});
+document.getElementById('copy-export')?.addEventListener('click', () => downloadJSON('album-copy.json', copyOverrides));
+document.getElementById('copy-import')?.addEventListener('change', async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  copyOverrides = JSON.parse(await file.text());
+  writeJSON(STORE_COPY, copyOverrides);
+  applyCopyOverrides();
+});
+
+function imageFileToDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        const maxEdge = 1600;
+        let { width, height } = img;
+        const scale = Math.min(1, maxEdge / Math.max(width, height));
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.86));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function dataURLToBlob(dataURL) {
+  const [meta, data] = dataURL.split(',');
+  const mime = (meta.match(/data:(.*?);base64/) || [])[1] || 'image/jpeg';
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new Blob([bytes], { type: mime });
+}
+
+function safeUploadName(name) {
+  return name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'image.jpg';
+}
+
+async function imageFileForInsert(file) {
+  const dataURL = await imageFileToDataURL(file);
+  if (!syncClient || !syncUser || !syncConfig.storageBucket) return dataURL;
+  const path = `${syncConfig.albumId || 'album'}/${Date.now()}-${safeUploadName(file.name).replace(/\.[^.]+$/, '')}.jpg`;
+  const blob = dataURLToBlob(dataURL);
+  const { error } = await syncClient.storage.from(syncConfig.storageBucket).upload(path, blob, { contentType: 'image/jpeg', upsert: false });
+  if (error) {
+    syncSetStatus(`图片上传失败，已保存到本机：${error.message}`);
+    return dataURL;
+  }
+  const { data } = syncClient.storage.from(syncConfig.storageBucket).getPublicUrl(path);
+  syncSetStatus('图片已上传云端');
+  return data.publicUrl || dataURL;
+}
+
+function renderCustomInserts() {
+  document.querySelectorAll('.photo-card.custom').forEach((node) => node.remove());
+  customInserts.forEach((item) => {
+    const target = document.querySelector(`[data-insert-target="${CSS.escape(item.target)}"]`);
+    if (!target) return;
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'photo-card portrait custom';
+    card.dataset.full = item.src;
+    card.dataset.thumb = item.src;
+    card.dataset.caption = item.caption || '新图片';
+    card.innerHTML = `<img src="${item.src}" alt="${item.caption || '新图片'}" loading="lazy" decoding="async"><span class="photo-caption">${item.caption || '新图片'}</span>`;
+    card.addEventListener('click', () => {
+      currentCard = null;
+      lightboxImg.src = item.src;
+      lightboxImg.alt = item.caption || '新图片';
+      lightboxCaption.textContent = item.caption || '新图片';
+      lightbox.classList.add('open');
+      lightbox.setAttribute('aria-hidden', 'false');
+      document.body.style.overflow = 'hidden';
+      updateUsToggle();
+    });
+    if (item.position === 'start') target.prepend(card);
+    else target.appendChild(card);
+  });
+}
+renderCustomInserts();
+
+document.getElementById('insert-file')?.addEventListener('change', async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const target = document.getElementById('insert-target').value;
+  const position = document.getElementById('insert-position').value;
+  const caption = document.getElementById('insert-caption').value.trim();
+  const src = await imageFileForInsert(file);
+  customInserts.push({ id: `custom-${Date.now()}`, target, position, caption, src });
+  writeJSON(STORE_INSERTS, customInserts);
+  queueCloudSave();
+  renderCustomInserts();
+  event.target.value = '';
+});
+
+document.getElementById('state-export')?.addEventListener('click', () => {
+  downloadJSON('album-adjustments.json', { copyOverrides, customInserts, usAdds, usRemoves });
+});
+document.getElementById('state-import')?.addEventListener('change', async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const state = JSON.parse(await file.text());
+  copyOverrides = state.copyOverrides || {};
+  customInserts = state.customInserts || [];
+  usAdds = state.usAdds || {};
+  usRemoves = state.usRemoves || {};
+  writeJSON(STORE_COPY, copyOverrides);
+  writeJSON(STORE_INSERTS, customInserts);
+  writeJSON(STORE_US_ADDS, usAdds);
+  writeJSON(STORE_US_REMOVES, usRemoves);
+  applyCopyOverrides();
+  renderCustomInserts();
+  renderUsGrid();
+  queueCloudSave();
+});
+
+
+async function initCloudSync() {
+  if (!syncConfig.enabled) {
+    syncSetStatus('云同步未配置：填写 assets/sync-config.js 后启用');
+    return;
+  }
+  if (!window.supabase || !syncConfig.supabaseUrl || !syncConfig.anonKey) {
+    syncSetStatus('云同步缺少 Supabase SDK / URL / anon key');
+    return;
+  }
+  syncClient = window.supabase.createClient(syncConfig.supabaseUrl, syncConfig.anonKey);
+  const { data } = await syncClient.auth.getSession();
+  syncUser = data.session?.user || null;
+  syncSetStatus(syncUser ? `已登录：${syncUser.email}` : '云同步已连接，未登录');
+  syncClient.auth.onAuthStateChange((_event, session) => {
+    syncUser = session?.user || null;
+    syncSetStatus(syncUser ? `已登录：${syncUser.email}` : '云同步已连接，未登录');
+  });
+  if (syncConfig.autoLoad !== false) {
+    await loadCloudState().catch((error) => syncSetStatus(`读取云端失败：${error.message}`));
+  }
+}
+
+async function signInCloud() {
+  if (!syncClient) return syncSetStatus('云同步未配置');
+  const email = document.getElementById('sync-email')?.value.trim();
+  const password = document.getElementById('sync-password')?.value;
+  if (!email || !password) return syncSetStatus('请输入 Supabase 邮箱和密码');
+  const { data, error } = await syncClient.auth.signInWithPassword({ email, password });
+  if (error) return syncSetStatus(`登录失败：${error.message}`);
+  syncUser = data.user;
+  syncSetStatus(`已登录：${syncUser.email}`);
+  await loadCloudState().catch((loadError) => syncSetStatus(`读取云端失败：${loadError.message}`));
+}
+
+async function signOutCloud() {
+  if (!syncClient) return;
+  await syncClient.auth.signOut();
+  syncUser = null;
+  syncSetStatus('已退出云同步');
+}
+
+async function loadCloudState() {
+  if (!syncClient) return syncSetStatus('云同步未配置');
+  const table = syncConfig.stateTable || 'album_states';
+  const albumId = syncConfig.albumId || 'graduation-album';
+  const { data, error } = await syncClient.from(table).select('state,updated_at').eq('album_id', albumId).maybeSingle();
+  if (error) throw error;
+  if (!data?.state) return syncSetStatus('云端还没有保存过调整');
+  applyAlbumState(data.state);
+  syncSetStatus(`已读取云端：${data.updated_at || ''}`);
+}
+
+async function saveCloudState() {
+  if (!syncClient) return syncSetStatus('云同步未配置');
+  if (!syncUser) return syncSetStatus('请先登录，再保存到云端');
+  const table = syncConfig.stateTable || 'album_states';
+  const albumId = syncConfig.albumId || 'graduation-album';
+  const payload = { album_id: albumId, state: getAlbumState(), updated_at: new Date().toISOString() };
+  const { error } = await syncClient.from(table).upsert(payload, { onConflict: 'album_id' });
+  if (error) throw error;
+  syncSetStatus('已保存到云端，其他设备刷新后可同步');
+}
+
+document.getElementById('sync-login')?.addEventListener('click', () => signInCloud().catch((error) => syncSetStatus(`登录失败：${error.message}`)));
+document.getElementById('sync-logout')?.addEventListener('click', () => signOutCloud().catch((error) => syncSetStatus(`退出失败：${error.message}`)));
+document.getElementById('sync-load')?.addEventListener('click', () => loadCloudState().catch((error) => syncSetStatus(`读取云端失败：${error.message}`)));
+document.getElementById('sync-save')?.addEventListener('click', () => saveCloudState().catch((error) => syncSetStatus(`保存云端失败：${error.message}`)));
+initCloudSync().catch((error) => syncSetStatus(`云同步初始化失败：${error.message}`));
