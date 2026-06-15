@@ -16061,6 +16061,20 @@
       <option value="start">放到开头</option>
     </select>
     <input type="text" id="insert-caption" placeholder="图片说明">
+    <input type="text" id="photo-date-value" placeholder="点开照片后修改日期" disabled>
+    <button type="button" id="photo-date-save" disabled>保存日期</button>
+    <button type="button" id="photo-date-reset" disabled>还原日期</button>
+    <select id="month-year" aria-label="新增月份年份">
+      <option value="2022">2022</option>
+      <option value="2023">2023</option>
+      <option value="2024">2024</option>
+      <option value="2025">2025</option>
+      <option value="2026">2026</option>
+    </select>
+    <input type="text" id="month-title" placeholder="新增月份名称，例如 七月">
+    <button type="button" id="month-add">新增月份</button>
+    <select id="month-manage-target" aria-label="删除或恢复月份"></select>
+    <button type="button" id="month-toggle">删除月份</button>
     <label class="file-action">插入图片<input type="file" id="insert-file" accept="image/*"></label>
     <button type="button" id="state-export">导出调整</button>
     <label class="file-action">导入调整<input type="file" id="state-import" accept="application/json"></label>

@@ -421,6 +421,11 @@ main { overflow: hidden; }
   padding: 0 9px;
 }
 .music-row button { flex: 1; font-size: 0.75rem; }
+.editor-body button:disabled,
+.editor-body input:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
 #track-volume { width: 100%; accent-color: #6b7f69; }
 
 .editor-panel {
@@ -462,6 +467,7 @@ main { overflow: hidden; }
   font-size: 0.84rem;
 }
 .file-action input { display: none; }
+.month-hidden { display: none !important; }
 [data-copy-id].editing-copy {
   outline: 1px dashed rgba(107, 127, 105, 0.7);
   outline-offset: 4px;

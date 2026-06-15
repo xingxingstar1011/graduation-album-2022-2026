@@ -3,6 +3,8 @@ const STORE_COPY = 'graduationAlbum.copyOverrides.v1';
 const STORE_INSERTS = 'graduationAlbum.customInserts.v1';
 const STORE_US_ADDS = 'graduationAlbum.usAdds.v1';
 const STORE_US_REMOVES = 'graduationAlbum.usRemoves.v1';
+const STORE_PHOTO_DATES = 'graduationAlbum.photoDateOverrides.v1';
+const STORE_MONTHS = 'graduationAlbum.monthAdjustments.v1';
 
 function readJSON(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key) || ''); } catch { return fallback; }
@@ -20,10 +22,20 @@ function downloadJSON(name, value) {
   setTimeout(() => URL.revokeObjectURL(url), 500);
 }
 
+function normalizeMonthAdjustments(value) {
+  return {
+    hidden: value?.hidden && typeof value.hidden === 'object' ? value.hidden : {},
+    custom: Array.isArray(value?.custom) ? value.custom : []
+  };
+}
+
 let copyOverrides = readJSON(STORE_COPY, {});
 let customInserts = readJSON(STORE_INSERTS, []);
 let usAdds = readJSON(STORE_US_ADDS, {});
 let usRemoves = readJSON(STORE_US_REMOVES, {});
+let photoDateOverrides = readJSON(STORE_PHOTO_DATES, {});
+let monthAdjustments = normalizeMonthAdjustments(readJSON(STORE_MONTHS, {}));
+let editingCopy = false;
 
 const syncConfig = window.ALBUM_SYNC_CONFIG || {};
 let syncClient = null;
@@ -41,6 +53,8 @@ function getAlbumState() {
     customInserts,
     usAdds,
     usRemoves,
+    photoDateOverrides,
+    monthAdjustments,
     savedAt: new Date().toISOString()
   };
 }
@@ -50,6 +64,8 @@ function persistAlbumState() {
   writeJSON(STORE_INSERTS, customInserts);
   writeJSON(STORE_US_ADDS, usAdds);
   writeJSON(STORE_US_REMOVES, usRemoves);
+  writeJSON(STORE_PHOTO_DATES, photoDateOverrides);
+  writeJSON(STORE_MONTHS, monthAdjustments);
 }
 
 function applyAlbumState(state) {
@@ -57,8 +73,12 @@ function applyAlbumState(state) {
   customInserts = state?.customInserts || [];
   usAdds = state?.usAdds || {};
   usRemoves = state?.usRemoves || {};
+  photoDateOverrides = state?.photoDateOverrides || {};
+  monthAdjustments = normalizeMonthAdjustments(state?.monthAdjustments);
   persistAlbumState();
+  applyMonthAdjustments();
   applyCopyOverrides();
+  applyPhotoDateOverrides();
   renderCustomInserts();
   renderUsGrid();
 }
@@ -72,11 +92,24 @@ function queueCloudSave() {
 
 function applyCopyOverrides() {
   document.querySelectorAll('[data-copy-id]').forEach((node) => {
+    bindCopyNode(node);
     const id = node.dataset.copyId;
     if (copyOverrides[id] !== undefined) node.innerHTML = copyOverrides[id];
+    node.contentEditable = editingCopy ? 'true' : 'false';
+    node.classList.toggle('editing-copy', editingCopy);
   });
 }
-applyCopyOverrides();
+
+function bindCopyNode(node) {
+  if (node.dataset.copyBound === '1') return;
+  node.dataset.copyBound = '1';
+  node.addEventListener('blur', () => {
+    if (!editingCopy) return;
+    copyOverrides[node.dataset.copyId] = node.innerHTML;
+    writeJSON(STORE_COPY, copyOverrides);
+    queueCloudSave();
+  });
+}
 
 const originalCards = Array.from(document.querySelectorAll('.month-spread .photo-card'));
 const lightbox = document.querySelector('.lightbox');
@@ -86,8 +119,233 @@ const closeBtn = lightbox.querySelector('.lightbox-close');
 const prevBtn = lightbox.querySelector('.lightbox-prev');
 const nextBtn = lightbox.querySelector('.lightbox-next');
 const usToggle = document.getElementById('us-toggle');
+const photoDateInput = document.getElementById('photo-date-value');
+const photoDateSave = document.getElementById('photo-date-save');
+const photoDateReset = document.getElementById('photo-date-reset');
+const monthYearSelect = document.getElementById('month-year');
+const monthTitleInput = document.getElementById('month-title');
+const monthAddBtn = document.getElementById('month-add');
+const monthManageSelect = document.getElementById('month-manage-target');
+const monthToggleBtn = document.getElementById('month-toggle');
 let currentIndex = 0;
 let currentCard = null;
+
+document.querySelectorAll('.photo-card[data-photo-id]').forEach((card) => {
+  if (!card.dataset.originalCaption) {
+    card.dataset.originalCaption = card.dataset.caption || card.querySelector('.photo-caption')?.textContent || '';
+  }
+});
+
+function setPhotoCardCaption(card, caption) {
+  card.dataset.caption = caption;
+  const label = card.querySelector('.photo-caption');
+  if (label) label.textContent = caption;
+  const img = card.querySelector('img');
+  if (img) img.alt = caption;
+  card.setAttribute('aria-label', `查看照片 ${caption}`);
+}
+
+function applyPhotoDateOverrides(root = document) {
+  const cards = root.matches?.('.photo-card[data-photo-id]')
+    ? [root, ...root.querySelectorAll('.photo-card[data-photo-id]')]
+    : Array.from(root.querySelectorAll('.photo-card[data-photo-id]'));
+  cards.forEach((card) => {
+    if (!card.dataset.originalCaption) {
+      card.dataset.originalCaption = card.dataset.caption || card.querySelector('.photo-caption')?.textContent || '';
+    }
+    const id = card.dataset.photoId;
+    const caption = photoDateOverrides[id] || card.dataset.originalCaption || '';
+    setPhotoCardCaption(card, caption);
+  });
+}
+
+function updatePhotoDateControls() {
+  if (!photoDateInput) return;
+  const hasPhoto = !!currentCard?.dataset?.photoId;
+  photoDateInput.disabled = !hasPhoto;
+  if (photoDateSave) photoDateSave.disabled = !hasPhoto;
+  if (photoDateReset) photoDateReset.disabled = !hasPhoto;
+  photoDateInput.value = hasPhoto ? (currentCard.dataset.caption || '') : '';
+  photoDateInput.placeholder = hasPhoto ? '修改这张照片的日期' : '先点开一张照片';
+}
+
+function saveCurrentPhotoDate() {
+  if (!currentCard?.dataset?.photoId || !photoDateInput) {
+    syncSetStatus('先点开一张照片，再修改日期');
+    return;
+  }
+  const id = currentCard.dataset.photoId;
+  const value = photoDateInput.value.trim();
+  if (value) photoDateOverrides[id] = value;
+  else delete photoDateOverrides[id];
+  writeJSON(STORE_PHOTO_DATES, photoDateOverrides);
+  applyPhotoDateOverrides();
+  renderUsGrid();
+  openLightboxByCard(currentCard);
+  queueCloudSave();
+  syncSetStatus('照片日期已保存');
+}
+
+function resetCurrentPhotoDate() {
+  if (!currentCard?.dataset?.photoId) {
+    syncSetStatus('先点开一张照片，再还原日期');
+    return;
+  }
+  delete photoDateOverrides[currentCard.dataset.photoId];
+  writeJSON(STORE_PHOTO_DATES, photoDateOverrides);
+  applyPhotoDateOverrides();
+  renderUsGrid();
+  openLightboxByCard(currentCard);
+  queueCloudSave();
+  syncSetStatus('照片日期已还原');
+}
+
+function escapeHTML(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[char]));
+}
+
+function sectionIdFromTarget(target) {
+  return target?.startsWith('insert-') ? `section-${target.slice(7)}` : target;
+}
+
+function monthTargetFromArticle(article) {
+  return article.querySelector('[data-insert-target]')?.dataset.insertTarget || article.id.replace(/^section-/, 'insert-');
+}
+
+function monthLabelFromArticle(article) {
+  const layout = article.querySelector('[data-insert-target]');
+  const heading = article.querySelector('.month-meta h3')?.textContent?.trim();
+  return layout?.dataset.insertLabel || heading || article.id.replace(/^section-/, '');
+}
+
+function renderCustomMonths() {
+  document.querySelectorAll('.month-spread.custom-month').forEach((node) => node.remove());
+  document.querySelectorAll('.month-index a[data-custom-month="1"]').forEach((node) => node.remove());
+  document.querySelectorAll('#insert-target option[data-custom-month="1"]').forEach((node) => node.remove());
+
+  monthAdjustments.custom.forEach((item) => {
+    if (!item?.id || !item.year) return;
+    const yearSection = document.getElementById(`year-${item.year}`);
+    if (!yearSection) return;
+    const sectionId = `section-${item.id}`;
+    const target = `insert-${item.id}`;
+    const title = item.title || '新增月份';
+    const label = `${item.year} / ${title}`;
+
+    const nav = yearSection.querySelector('.month-index');
+    if (nav) {
+      const link = document.createElement('a');
+      link.href = `#${sectionId}`;
+      link.dataset.customMonth = '1';
+      link.textContent = title;
+      nav.appendChild(link);
+    }
+
+    const article = document.createElement('article');
+    article.className = 'month-spread custom-month';
+    article.id = sectionId;
+    article.innerHTML = `
+      <div class="month-meta">
+        <p class="eyebrow" data-copy-id="${item.id}.eyebrow">${item.year} / Added Month</p>
+        <h3 data-copy-id="${item.id}.title">${escapeHTML(title)}</h3>
+        <p data-copy-id="${item.id}.desc">新增的月份，可以继续插入照片和编辑文案。</p>
+        <span>0 frames</span>
+      </div>
+      <div class="photo-layout layout-dense" data-insert-target="${target}" data-insert-label="${escapeHTML(label)}"></div>
+    `;
+    yearSection.appendChild(article);
+
+    const insertTarget = document.getElementById('insert-target');
+    if (insertTarget) {
+      const option = document.createElement('option');
+      option.value = target;
+      option.textContent = label;
+      option.dataset.customMonth = '1';
+      insertTarget.appendChild(option);
+    }
+  });
+}
+
+function populateMonthControls() {
+  if (!monthManageSelect) return;
+  const previous = monthManageSelect.value;
+  monthManageSelect.innerHTML = '';
+  document.querySelectorAll('.month-spread').forEach((article) => {
+    const target = monthTargetFromArticle(article);
+    const option = document.createElement('option');
+    option.value = target;
+    option.textContent = monthAdjustments.hidden[target] ? `${monthLabelFromArticle(article)}（已删除）` : monthLabelFromArticle(article);
+    monthManageSelect.appendChild(option);
+  });
+  if (previous && Array.from(monthManageSelect.options).some((option) => option.value === previous)) {
+    monthManageSelect.value = previous;
+  }
+  updateMonthToggleLabel();
+}
+
+function updateMonthToggleLabel() {
+  if (!monthToggleBtn || !monthManageSelect) return;
+  monthToggleBtn.textContent = monthAdjustments.hidden[monthManageSelect.value] ? '恢复月份' : '删除月份';
+}
+
+function applyMonthAdjustments() {
+  monthAdjustments = normalizeMonthAdjustments(monthAdjustments);
+  renderCustomMonths();
+  document.querySelectorAll('.month-spread').forEach((article) => {
+    const target = monthTargetFromArticle(article);
+    const hidden = !!monthAdjustments.hidden[target];
+    article.hidden = hidden;
+    article.classList.toggle('month-hidden', hidden);
+    document.querySelectorAll(`.month-index a[href="#${CSS.escape(article.id)}"]`).forEach((link) => {
+      link.hidden = hidden;
+    });
+  });
+  populateMonthControls();
+  applyCopyOverrides();
+}
+
+function addCustomMonth() {
+  const year = monthYearSelect?.value;
+  const title = monthTitleInput?.value.trim();
+  if (!year || !title) {
+    syncSetStatus('请选择年份并填写月份名称');
+    return;
+  }
+  const id = `custom-${year}-${Date.now()}`;
+  monthAdjustments.custom.push({ id, year, title, createdAt: new Date().toISOString() });
+  writeJSON(STORE_MONTHS, monthAdjustments);
+  applyMonthAdjustments();
+  renderCustomInserts();
+  if (monthManageSelect) monthManageSelect.value = `insert-${id}`;
+  if (document.getElementById('insert-target')) document.getElementById('insert-target').value = `insert-${id}`;
+  if (monthTitleInput) monthTitleInput.value = '';
+  queueCloudSave();
+  syncSetStatus('月份已新增');
+}
+
+function toggleSelectedMonth() {
+  const target = monthManageSelect?.value;
+  if (!target) {
+    syncSetStatus('请选择要删除或恢复的月份');
+    return;
+  }
+  if (monthAdjustments.hidden[target]) {
+    delete monthAdjustments.hidden[target];
+    syncSetStatus('月份已恢复');
+  } else {
+    monthAdjustments.hidden[target] = true;
+    syncSetStatus('月份已删除');
+  }
+  writeJSON(STORE_MONTHS, monthAdjustments);
+  applyMonthAdjustments();
+  queueCloudSave();
+}
 
 function isInUs(card) {
   const id = card.dataset.photoId;
@@ -114,7 +372,7 @@ function setUsState(card, value) {
 }
 
 function updateUsToggle() {
-  if (!currentCard || !currentCard.dataset.photoId) {
+  if (!currentCard || !currentCard.dataset.photoId || !originalCards.includes(currentCard)) {
     usToggle.style.display = 'none';
     return;
   }
@@ -133,6 +391,7 @@ function openLightboxByCard(card) {
   lightbox.setAttribute('aria-hidden', 'false');
   document.body.style.overflow = 'hidden';
   updateUsToggle();
+  updatePhotoDateControls();
 }
 
 function openLightbox(index) {
@@ -146,6 +405,7 @@ function closeLightbox() {
   lightbox.setAttribute('aria-hidden', 'true');
   lightboxImg.src = '';
   document.body.style.overflow = '';
+  updatePhotoDateControls();
 }
 
 function step(delta) {
@@ -163,6 +423,14 @@ nextBtn.addEventListener('click', () => step(1));
 usToggle.addEventListener('click', () => {
   if (currentCard) setUsState(currentCard, !isInUs(currentCard));
 });
+photoDateSave?.addEventListener('click', saveCurrentPhotoDate);
+photoDateReset?.addEventListener('click', resetCurrentPhotoDate);
+photoDateInput?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') saveCurrentPhotoDate();
+});
+monthAddBtn?.addEventListener('click', addCustomMonth);
+monthToggleBtn?.addEventListener('click', toggleSelectedMonth);
+monthManageSelect?.addEventListener('change', updateMonthToggleLabel);
 lightbox.addEventListener('click', (event) => {
   if (event.target === lightbox) closeLightbox();
 });
@@ -240,24 +508,12 @@ volume?.addEventListener('input', () => {
 });
 
 const copyToggle = document.getElementById('copy-toggle');
-let editingCopy = false;
 function setCopyEditing(enabled) {
   editingCopy = enabled;
-  document.querySelectorAll('[data-copy-id]').forEach((node) => {
-    node.contentEditable = enabled ? 'true' : 'false';
-    node.classList.toggle('editing-copy', enabled);
-  });
+  applyCopyOverrides();
   copyToggle.textContent = enabled ? '完成文案' : '文案';
 }
 copyToggle?.addEventListener('click', () => setCopyEditing(!editingCopy));
-document.querySelectorAll('[data-copy-id]').forEach((node) => {
-  node.addEventListener('blur', () => {
-    if (!editingCopy) return;
-    copyOverrides[node.dataset.copyId] = node.innerHTML;
-    writeJSON(STORE_COPY, copyOverrides);
-    queueCloudSave();
-  });
-});
 document.getElementById('copy-export')?.addEventListener('click', () => downloadJSON('album-copy.json', copyOverrides));
 document.getElementById('copy-import')?.addEventListener('change', async (event) => {
   const file = event.target.files?.[0];
@@ -328,20 +584,14 @@ function renderCustomInserts() {
     const card = document.createElement('button');
     card.type = 'button';
     card.className = 'photo-card portrait custom';
+    card.dataset.photoId = item.id;
     card.dataset.full = item.src;
     card.dataset.thumb = item.src;
     card.dataset.caption = item.caption || '新图片';
+    card.dataset.originalCaption = item.caption || '新图片';
     card.innerHTML = `<img src="${item.src}" alt="${item.caption || '新图片'}" loading="lazy" decoding="async"><span class="photo-caption">${item.caption || '新图片'}</span>`;
-    card.addEventListener('click', () => {
-      currentCard = null;
-      lightboxImg.src = item.src;
-      lightboxImg.alt = item.caption || '新图片';
-      lightboxCaption.textContent = item.caption || '新图片';
-      lightbox.classList.add('open');
-      lightbox.setAttribute('aria-hidden', 'false');
-      document.body.style.overflow = 'hidden';
-      updateUsToggle();
-    });
+    applyPhotoDateOverrides(card);
+    card.addEventListener('click', () => openLightboxByCard(card));
     if (item.position === 'start') target.prepend(card);
     else target.appendChild(card);
   });
@@ -363,7 +613,7 @@ document.getElementById('insert-file')?.addEventListener('change', async (event)
 });
 
 document.getElementById('state-export')?.addEventListener('click', () => {
-  downloadJSON('album-adjustments.json', { copyOverrides, customInserts, usAdds, usRemoves });
+  downloadJSON('album-adjustments.json', { copyOverrides, customInserts, usAdds, usRemoves, photoDateOverrides, monthAdjustments });
 });
 document.getElementById('state-import')?.addEventListener('change', async (event) => {
   const file = event.target.files?.[0];
@@ -373,16 +623,28 @@ document.getElementById('state-import')?.addEventListener('change', async (event
   customInserts = state.customInserts || [];
   usAdds = state.usAdds || {};
   usRemoves = state.usRemoves || {};
+  photoDateOverrides = state.photoDateOverrides || {};
+  monthAdjustments = normalizeMonthAdjustments(state.monthAdjustments);
   writeJSON(STORE_COPY, copyOverrides);
   writeJSON(STORE_INSERTS, customInserts);
   writeJSON(STORE_US_ADDS, usAdds);
   writeJSON(STORE_US_REMOVES, usRemoves);
+  writeJSON(STORE_PHOTO_DATES, photoDateOverrides);
+  writeJSON(STORE_MONTHS, monthAdjustments);
+  applyMonthAdjustments();
   applyCopyOverrides();
+  applyPhotoDateOverrides();
   renderCustomInserts();
   renderUsGrid();
   queueCloudSave();
 });
 
+applyMonthAdjustments();
+applyCopyOverrides();
+applyPhotoDateOverrides();
+renderCustomInserts();
+renderUsGrid();
+updatePhotoDateControls();
 
 async function initCloudSync() {
   if (!syncConfig.enabled) {
