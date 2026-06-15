@@ -472,7 +472,21 @@ const prevTrackBtn = document.getElementById('track-prev');
 const nextTrackBtn = document.getElementById('track-next');
 const muteBtn = document.getElementById('track-mute');
 const volume = document.getElementById('track-volume');
+const defaultTrackIndex = Math.max(0, tracks.findIndex((track) => track.title?.toLowerCase() === 'yellow' || track.src?.includes('track-02')));
 let trackIndex = 0;
+let pendingAutoplay = false;
+let userPausedAudio = false;
+
+function requestAudioPlay() {
+  if (!audio || !tracks.length) return;
+  userPausedAudio = false;
+  audio.play()
+    .then(() => { pendingAutoplay = false; })
+    .catch(() => {
+      pendingAutoplay = true;
+      if (playBtn) playBtn.textContent = 'Play';
+    });
+}
 
 function loadTrack(index, shouldPlay = false) {
   if (!tracks.length) return;
@@ -480,18 +494,29 @@ function loadTrack(index, shouldPlay = false) {
   const track = tracks[trackIndex];
   audio.src = track.src;
   trackTitle.textContent = `${track.title} - ${track.artist}`;
-  if (shouldPlay) audio.play().catch(() => {});
+  if (shouldPlay) requestAudioPlay();
   playBtn.textContent = audio.paused ? 'Play' : 'Pause';
 }
 if (tracks.length) {
   audio.volume = Number(volume.value);
-  loadTrack(0, false);
+  pendingAutoplay = true;
+  loadTrack(defaultTrackIndex, true);
 }
 playBtn?.addEventListener('click', () => {
   if (!tracks.length) return;
-  if (audio.paused) audio.play().catch(() => {});
-  else audio.pause();
+  if (audio.paused) requestAudioPlay();
+  else {
+    pendingAutoplay = false;
+    userPausedAudio = true;
+    audio.pause();
+  }
 });
+function resumePendingAutoplay() {
+  if (pendingAutoplay && !userPausedAudio && audio?.paused) requestAudioPlay();
+}
+document.addEventListener('pointerdown', resumePendingAutoplay, { capture: true });
+document.addEventListener('touchstart', resumePendingAutoplay, { capture: true });
+document.addEventListener('keydown', resumePendingAutoplay, { capture: true });
 audio?.addEventListener('play', () => { playBtn.textContent = 'Pause'; });
 audio?.addEventListener('pause', () => { playBtn.textContent = 'Play'; });
 audio?.addEventListener('ended', () => loadTrack(trackIndex + 1, true));
