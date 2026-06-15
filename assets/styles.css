@@ -193,6 +193,46 @@ main { overflow: hidden; }
 .intro-band p,
 .ending p { margin: 0; color: #5e5851; line-height: 1.95; }
 
+.tutorial-section {
+  padding: 86px 8vw 108px;
+  background: var(--page);
+  border-top: 1px solid var(--line);
+}
+.tutorial-grid {
+  width: min(1180px, 100%);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 0.72fr 1.28fr;
+  gap: 42px;
+  align-items: start;
+}
+.tutorial-copy h2 { font-size: 3rem; line-height: 1.15; }
+.tutorial-copy p:not(.eyebrow),
+.tutorial-panel p {
+  margin: 0;
+  color: #5e5851;
+  line-height: 1.95;
+}
+.tutorial-panel {
+  display: grid;
+  gap: 12px;
+}
+.tutorial-panel p {
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(128, 118, 105, 0.2);
+}
+.tutorial-panel strong {
+  display: inline-block;
+  min-width: 42px;
+  color: var(--accent);
+  font-weight: 500;
+}
+.tutorial-gallery {
+  width: min(1180px, 100%);
+  margin: 36px auto 0;
+}
+.tutorial-gallery:empty { display: none; }
+
 .us-section { background: #f5f1f4; }
 .us-header {
   width: min(1180px, 100%);
@@ -475,8 +515,9 @@ main { overflow: hidden; }
 }
 
 @media (max-width: 860px) {
-  .topbar { padding: 0 16px; }
-  .top-links { display: none; }
+  .topbar { padding: 0 16px; gap: 16px; overflow-x: auto; }
+  .brand { flex: 0 0 auto; }
+  .top-links { flex: 0 0 auto; gap: 12px; font-size: 0.82rem; }
   .cover {
     min-height: 92svh;
     align-items: flex-end;
@@ -492,6 +533,7 @@ main { overflow: hidden; }
   .timeline-heading,
   .intro-band,
   .ending,
+  .tutorial-grid,
   .year-header,
   .us-header,
   .month-spread { grid-template-columns: 1fr; }
@@ -500,9 +542,13 @@ main { overflow: hidden; }
   .timeline-card { height: 154px; }
   .intro-band,
   .ending,
+  .tutorial-section,
   .us-section { padding: 58px 24px; gap: 20px; }
   .intro-band h2,
-  .ending h2 { font-size: 1.8rem; }
+  .ending h2,
+  .tutorial-copy h2 { font-size: 1.8rem; }
+  .tutorial-grid { gap: 22px; }
+  .tutorial-gallery { margin-top: 28px; }
   .year-header,
   .us-header { width: calc(100% - 32px); gap: 18px; }
   .year-header h2,
@@ -553,7 +599,7 @@ main { overflow: hidden; }
 @media print {
   .topbar, .cover-action, .lightbox, .music-player, .editor-panel { display: none !important; }
   body { background: #fff; }
-  .cover, .intro-band, .year-section, .ending { break-inside: avoid; }
+  .cover, .intro-band, .year-section, .ending, .tutorial-section { break-inside: avoid; }
   .month-spread { break-inside: avoid; page-break-inside: avoid; }
   .photo-card { box-shadow: none; }
 }
