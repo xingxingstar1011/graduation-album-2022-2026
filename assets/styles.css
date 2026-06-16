@@ -245,6 +245,17 @@ main { overflow: hidden; }
 .us-header h2 { font-size: 3.2rem; }
 .us-header p { margin: 0; color: #5d5750; line-height: 1.85; }
 .us-header span { color: var(--muted); font-size: 0.82rem; white-space: nowrap; }
+.us-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.us-add-action {
+  min-width: 92px;
+  padding: 8px 12px;
+}
 .us-grid { width: min(1180px, 100%); margin: 0 auto; }
 
 .year-section { padding: 86px 0 28px; }

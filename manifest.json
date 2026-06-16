@@ -1,6 +1,6 @@
 {
   "title": "毕业相册 2022-2026",
-  "total_photos": 1265,
+  "total_photos": 1276,
   "groups": {
     "2022-open": 2,
     "2023-04": 7,
@@ -46,7 +46,7 @@
     "2026-03": 35,
     "2026-04": 33,
     "2026-05": 35,
-    "2026-06": 26
+    "2026-06": 37
   },
   "sources_included": [
     "D:/2022",
@@ -55,7 +55,7 @@
     "D:/2025",
     "D:/2026"
   ],
-  "raw_sources": 1821,
+  "raw_sources": 1832,
   "duplicate_exact": 551,
   "duplicate_perceptual": 5,
   "duplicates_removed": 556,
@@ -81,5 +81,6 @@
       "artist": "任然 / 小来",
       "src": "assets/audio/track-04.mp3"
     }
-  ]
+  ],
+  "us_folder_photos": 100
 }

@@ -79,8 +79,8 @@ function applyAlbumState(state) {
   applyMonthAdjustments();
   applyCopyOverrides();
   applyPhotoDateOverrides();
-  renderCustomInserts();
   renderUsGrid();
+  renderCustomInserts();
 }
 
 function queueCloudSave() {
@@ -112,6 +112,7 @@ function bindCopyNode(node) {
 }
 
 const originalCards = Array.from(document.querySelectorAll('.month-spread .photo-card'));
+const staticUsCards = Array.from(document.querySelectorAll('#us-grid .photo-card.us-static'));
 const lightbox = document.querySelector('.lightbox');
 const lightboxImg = lightbox.querySelector('img');
 const lightboxCaption = lightbox.querySelector('figcaption');
@@ -181,6 +182,7 @@ function saveCurrentPhotoDate() {
   writeJSON(STORE_PHOTO_DATES, photoDateOverrides);
   applyPhotoDateOverrides();
   renderUsGrid();
+  renderCustomInserts();
   openLightboxByCard(currentCard);
   queueCloudSave();
   syncSetStatus('照片日期已保存');
@@ -195,6 +197,7 @@ function resetCurrentPhotoDate() {
   writeJSON(STORE_PHOTO_DATES, photoDateOverrides);
   applyPhotoDateOverrides();
   renderUsGrid();
+  renderCustomInserts();
   openLightboxByCard(currentCard);
   queueCloudSave();
   syncSetStatus('照片日期已还原');
@@ -368,16 +371,12 @@ function setUsState(card, value) {
   writeJSON(STORE_US_REMOVES, usRemoves);
   queueCloudSave();
   renderUsGrid();
+  renderCustomInserts();
   updateUsToggle();
 }
 
 function updateUsToggle() {
-  if (!currentCard || !currentCard.dataset.photoId || !originalCards.includes(currentCard)) {
-    usToggle.style.display = 'none';
-    return;
-  }
-  usToggle.style.display = '';
-  usToggle.textContent = isInUs(currentCard) ? '移出我们' : '加入我们';
+  usToggle.style.display = 'none';
 }
 
 function openLightboxByCard(card) {
@@ -441,25 +440,22 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'ArrowRight') step(1);
 });
 
+function updateUsCount() {
+  const count = document.getElementById('us-count');
+  const grid = document.getElementById('us-grid');
+  if (count && grid) count.textContent = `${grid.querySelectorAll('.photo-card').length} photos`;
+}
+
 function renderUsGrid() {
   const grid = document.getElementById('us-grid');
   if (!grid) return;
   grid.innerHTML = '';
-  const cards = originalCards.filter(isInUs);
-  cards.forEach((card) => {
-    const clone = document.createElement('button');
-    clone.type = 'button';
-    clone.className = `photo-card ${card.classList.contains('wide') ? 'wide' : card.classList.contains('square') ? 'square' : 'portrait'}`;
-    clone.dataset.photoId = card.dataset.photoId;
-    clone.dataset.full = card.dataset.full;
-    clone.dataset.thumb = card.dataset.thumb;
-    clone.dataset.caption = card.dataset.caption;
-    clone.innerHTML = `<img src="${card.dataset.thumb}" alt="${card.dataset.caption || ''}" loading="lazy" decoding="async"><span class="photo-caption">我们</span>`;
-    clone.addEventListener('click', () => openLightboxByCard(card));
+  staticUsCards.forEach((card) => {
+    const clone = card.cloneNode(true);
+    clone.addEventListener('click', () => openLightboxByCard(clone));
     grid.appendChild(clone);
   });
-  const count = document.getElementById('us-count');
-  if (count) count.textContent = `${cards.length} photos`;
+  updateUsCount();
 }
 renderUsGrid();
 
@@ -606,20 +602,24 @@ function renderCustomInserts() {
   customInserts.forEach((item) => {
     const target = document.querySelector(`[data-insert-target="${CSS.escape(item.target)}"]`);
     if (!target) return;
+    const isUsTarget = item.target === 'insert-us';
+    const fallbackCaption = isUsTarget ? '\u6211\u4eec' : '\u65b0\u56fe\u7247';
+    const caption = item.caption || fallbackCaption;
     const card = document.createElement('button');
     card.type = 'button';
     card.className = 'photo-card portrait custom';
     card.dataset.photoId = item.id;
     card.dataset.full = item.src;
     card.dataset.thumb = item.src;
-    card.dataset.caption = item.caption || '新图片';
-    card.dataset.originalCaption = item.caption || '新图片';
-    card.innerHTML = `<img src="${item.src}" alt="${item.caption || '新图片'}" loading="lazy" decoding="async"><span class="photo-caption">${item.caption || '新图片'}</span>`;
+    card.dataset.caption = caption;
+    card.dataset.originalCaption = caption;
+    card.innerHTML = `<img src="${item.src}" alt="${caption}" loading="lazy" decoding="async">${isUsTarget ? '' : `<span class="photo-caption">${caption}</span>`}`;
     applyPhotoDateOverrides(card);
     card.addEventListener('click', () => openLightboxByCard(card));
     if (item.position === 'start') target.prepend(card);
     else target.appendChild(card);
   });
+  updateUsCount();
 }
 renderCustomInserts();
 
@@ -628,12 +628,26 @@ document.getElementById('insert-file')?.addEventListener('change', async (event)
   if (!file) return;
   const target = document.getElementById('insert-target').value;
   const position = document.getElementById('insert-position').value;
-  const caption = document.getElementById('insert-caption').value.trim();
+  const caption = document.getElementById('insert-caption').value.trim() || (target === 'insert-us' ? '\u6211\u4eec' : '');
   const src = await imageFileForInsert(file);
   customInserts.push({ id: `custom-${Date.now()}`, target, position, caption, src });
   writeJSON(STORE_INSERTS, customInserts);
   queueCloudSave();
   renderCustomInserts();
+  updateUsCount();
+  event.target.value = '';
+});
+
+
+document.getElementById('us-add-file')?.addEventListener('change', async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const src = await imageFileForInsert(file);
+  customInserts.push({ id: `custom-us-${Date.now()}`, target: 'insert-us', position: 'end', caption: '\u6211\u4eec', src });
+  writeJSON(STORE_INSERTS, customInserts);
+  queueCloudSave();
+  renderCustomInserts();
+  updateUsCount();
   event.target.value = '';
 });
 
@@ -659,16 +673,16 @@ document.getElementById('state-import')?.addEventListener('change', async (event
   applyMonthAdjustments();
   applyCopyOverrides();
   applyPhotoDateOverrides();
-  renderCustomInserts();
   renderUsGrid();
+  renderCustomInserts();
   queueCloudSave();
 });
 
 applyMonthAdjustments();
 applyCopyOverrides();
 applyPhotoDateOverrides();
-renderCustomInserts();
 renderUsGrid();
+renderCustomInserts();
 updatePhotoDateControls();
 
 async function initCloudSync() {
